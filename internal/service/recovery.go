@@ -28,6 +28,9 @@ func (runtime *Runtime) CancelCurrent(ctx context.Context) (Cancellation, error)
 	if err := runtime.jobControl.Cancel(current, time.Now()); err != nil {
 		return Cancellation{}, err
 	}
+	if err := runtime.stopMaintenanceFans(current, time.Now()); err != nil {
+		return Cancellation{}, err
+	}
 	return Cancellation{JobID: current.ID, Generation: current.Generation, CancelledAt: time.Now().UTC(), Components: []string{"job", "dryer", "web"}}, nil
 }
 

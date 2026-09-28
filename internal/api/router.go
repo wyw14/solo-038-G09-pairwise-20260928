@@ -24,6 +24,12 @@ func NewRouter(runtime *service.Runtime) http.Handler {
 		api.Get("/interlocks", handler.interlocks)
 		api.Get("/incidents", handler.incidents)
 		api.Get("/recovery", handler.recoveryStatus)
+		api.Get("/maintenance", handler.maintenanceCards)
+		api.Get("/maintenance/windows", handler.maintenanceWindows)
+		api.Get("/maintenance/{cardID}", handler.maintenanceCard)
+		api.Post("/maintenance/{cardID}/service", handler.recordMaintenanceService)
+		api.Post("/maintenance/{cardID}/replace", handler.replaceMaintenanceComponent)
+		api.Post("/maintenance/{cardID}/backfill", handler.backfillMaintenanceUsage)
 		api.Post("/jobs/current/cancel", handler.cancelCurrent)
 	})
 	return router

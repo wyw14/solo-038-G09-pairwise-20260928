@@ -12,6 +12,7 @@ import (
 	"github.com/wyw14/solo-038/internal/ink"
 	"github.com/wyw14/solo-038/internal/job"
 	"github.com/wyw14/solo-038/internal/journal"
+	"github.com/wyw14/solo-038/internal/maintenance"
 	"github.com/wyw14/solo-038/internal/model"
 	"github.com/wyw14/solo-038/internal/press"
 	"github.com/wyw14/solo-038/internal/register"
@@ -55,6 +56,7 @@ type Runtime struct {
 	folderControl   *folder.Controller
 	splice          *splice.State
 	spliceControl   *splice.Coordinator
+	maintenance     *maintenance.State
 	incidents       []Incident
 }
 
@@ -84,6 +86,7 @@ func NewRuntime(config Config) (*Runtime, error) {
 	runtime := &Runtime{startedAt: time.Now().UTC(), config: config, journal: journalStore, jobs: jobState, jobControl: job.NewCoordinator(jobState, dryerState), sensors: sensor.NewState(), unwind: unwindState, loader: unwind.NewLoader(unwindState), festoon: festoon, web: webState, webControl: web.NewCoordinator(webState, path), press: pressState, pressUnits: pressController, pressControl: press.NewCoordinator(pressController, pressState), phase: press.NewPhaseController(pressState, 2.5), ink: inkState, register: registerState, registerControl: register.NewCoordinator(registerState, journalStore), dryer: dryerState, dryerControl: dryer.NewCoordinator(dryerState), folder: folderState, folderControl: folder.NewController(folderState), splice: spliceState}
 	runtime.inkControl = ink.NewCoordinator(ink.NewCircuit(inkState))
 	runtime.spliceControl = splice.NewCoordinator(spliceState, festoon, splice.NewLeaseManager())
+	runtime.maintenance = maintenance.NewState()
 	return runtime, nil
 }
 
@@ -103,7 +106,11 @@ func (runtime *Runtime) Start(ctx context.Context) error {
 			return err
 		}
 	}
-	return nil
+	current, ok := runtime.jobs.Current()
+	if !ok {
+		return fmt.Errorf("there is no active job")
+	}
+	return runtime.restoreMaintenance(current, time.Now())
 }
 
 func (runtime *Runtime) Healthy() bool {

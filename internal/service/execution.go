@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/wyw14/solo-038/internal/dryer"
@@ -41,6 +42,16 @@ func (runtime *Runtime) ExecuteOperation(ctx context.Context, kind string) error
 	case <-ctx.Done():
 		return ctx.Err()
 	default:
+	}
+	if err := runtime.tickMaintenance(current, time.Now()); err != nil {
+		return err
+	}
+	if kind == "feed_web" && len(runtime.maintenance.Overdue()) > 0 {
+		ids := make([]string, 0, 4)
+		for _, card := range runtime.maintenance.Overdue() {
+			ids = append(ids, card.ID)
+		}
+		return fmt.Errorf("maintenance overdue components block startup: %s", strings.Join(ids, ", "))
 	}
 	switch kind {
 	case "load_roll":
@@ -84,7 +95,10 @@ func (runtime *Runtime) loadRollOperation(current model.Job) error {
 	if err := runtime.jobs.Put(updated); err != nil {
 		return err
 	}
-	return runtime.webControl.Prepare(string(updated.ID), updated.Generation, updated.RollGeneration)
+	if err := runtime.webControl.Prepare(string(updated.ID), updated.Generation, updated.RollGeneration); err != nil {
+		return err
+	}
+	return runtime.accrueMaintenance(updated, unwindBrakeCard, 1, "load_roll", now)
 }
 
 func (runtime *Runtime) feedWebOperation(ctx context.Context, current model.Job) error {
@@ -125,7 +139,15 @@ func (runtime *Runtime) feedWebOperation(ctx context.Context, current model.Job)
 	if _, err := web.AwaitWorker(context.Background(), result); err != nil {
 		return err
 	}
-	return runtime.verifyPath(readings)
+	if err := runtime.verifyPath(readings); err != nil {
+		return err
+	}
+	for _, unit := range pressUnitNames {
+		if err := runtime.accrueMaintenance(current, pressUnitCardPrefix+unit, 1, "feed_web", now); err != nil {
+			return err
+		}
+	}
+	return runtime.accrueMaintenance(current, unwindBrakeCard, 1, "feed_web", now)
 }
 
 func (runtime *Runtime) verifyPath(readings []sensor.Reading) error {
@@ -230,6 +252,7 @@ func (runtime *Runtime) switchInkOperation(withFault bool) error {
 }
 
 func (runtime *Runtime) startDryerOperation(ctx context.Context, current model.Job) error {
+	now := time.Now()
 	profile := dryer.Profile{Name: "production", Zones: []dryer.Zone{{Name: "entry", Temperature: 80, Airflow: 20}, {Name: "exit", Temperature: 100, Airflow: 24}}}
 	if profile.MaximumTemperature() <= 0 || profile.AverageAirflow() <= 0 {
 		return fmt.Errorf("dryer profile is invalid")
@@ -241,6 +264,11 @@ func (runtime *Runtime) startDryerOperation(ctx context.Context, current model.J
 		return err
 	}
 	_ = runtime.jobControl.DryerTemperature()
+	for _, fan := range dryerFanCards {
+		if _, err := runtime.maintenance.SetRunning(fan, true, now); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
