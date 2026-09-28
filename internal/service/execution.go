@@ -11,6 +11,7 @@ import (
 	"github.com/wyw14/solo-038/internal/ink"
 	"github.com/wyw14/solo-038/internal/job"
 	"github.com/wyw14/solo-038/internal/journal"
+	"github.com/wyw14/solo-038/internal/maintenance"
 	"github.com/wyw14/solo-038/internal/model"
 	"github.com/wyw14/solo-038/internal/press"
 	registerpkg "github.com/wyw14/solo-038/internal/register"
@@ -41,6 +42,11 @@ func (runtime *Runtime) ExecuteOperation(ctx context.Context, kind string) error
 	case <-ctx.Done():
 		return ctx.Err()
 	default:
+	}
+	if startupOperationKinds[kind] {
+		if blocked := runtime.maintenance.Blocked(); len(blocked) > 0 {
+			return errMaintenanceOverdue(blocked)
+		}
 	}
 	switch kind {
 	case "load_roll":
@@ -125,7 +131,11 @@ func (runtime *Runtime) feedWebOperation(ctx context.Context, current model.Job)
 	if _, err := web.AwaitWorker(context.Background(), result); err != nil {
 		return err
 	}
-	return runtime.verifyPath(readings)
+	if err := runtime.verifyPath(readings); err != nil {
+		return err
+	}
+	runtime.recordUsage(maintenance.ComponentUnwindBrake, 1, "operation:feed_web")
+	return nil
 }
 
 func (runtime *Runtime) verifyPath(readings []sensor.Reading) error {
@@ -194,8 +204,11 @@ func (runtime *Runtime) registerOperation(current model.Job) error {
 	if !runtime.pressControl.RegisterStable(0.1, 1) || !runtime.registerControl.Stable(1) {
 		return fmt.Errorf("register evidence did not stabilize")
 	}
-	_, err = press.ApplyRegisterFrame(runtime.phase, "cyan", frame, current.Generation, plateGeneration)
-	return err
+	if _, err := press.ApplyRegisterFrame(runtime.phase, "cyan", frame, current.Generation, plateGeneration); err != nil {
+		return err
+	}
+	runtime.recordUsage(maintenance.ComponentPressUnit, 1, "operation:adjust_phase")
+	return nil
 }
 
 func (runtime *Runtime) switchInkOperation(withFault bool) error {
@@ -241,6 +254,7 @@ func (runtime *Runtime) startDryerOperation(ctx context.Context, current model.J
 		return err
 	}
 	_ = runtime.jobControl.DryerTemperature()
+	runtime.recordUsage(maintenance.ComponentDryerFan, 5, "operation:start_dryer")
 	return nil
 }
 
